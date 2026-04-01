@@ -73,6 +73,7 @@ def init_state():
         "alert_emails": "",
         "auto_jira": True,
         "auto_email": True,
+        "auto_processed_ids": set(),   # track which issues already auto-processed
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -187,12 +188,20 @@ def generate_issues():
     if st.session_state.issues:
         return st.session_state.issues
     random.seed(42)
-    sources = ["NDC API", "Booking Engine", "Payment Gateway", "AWS Lambda", "ECS Service",
-               "RDS Database", "Kafka Consumer", "Auth Service", "CDN", "Load Balancer"]
-    types   = ["TimeoutException", "ConnectionRefused", "NullPointerException", "OutOfMemory",
-               "HTTP 500", "HTTP 503", "DB Connection Pool Exhausted", "SSL Certificate",
-               "High CPU Usage", "Memory Leak", "Disk Full", "Queue Backlog"]
-    crits   = ["CRITICAL", "CRITICAL", "HIGH", "HIGH", "HIGH", "MEDIUM", "MEDIUM", "MEDIUM", "LOW", "INFO"]
+    sources = [
+        "Booking Engine", "Payment Gateway", "AWS Lambda", "ECS Service",
+        "RDS Database", "Kafka Consumer", "Auth Service", "CDN", "Load Balancer",
+        "API Gateway", "S3 Storage", "ElastiCache", "SQS Queue", "Notification Service",
+    ]
+    types = [
+        "TimeoutException", "ConnectionRefused", "NullPointerException", "OutOfMemoryError",
+        "HTTP 500 Internal Server Error", "HTTP 503 Service Unavailable",
+        "DB Connection Pool Exhausted", "SSL Certificate Expired",
+        "High CPU Usage (>90%)", "Memory Leak Detected", "Disk Space Critical (<5%)",
+        "Queue Backlog Exceeded Threshold", "Circuit Breaker OPEN",
+        "Unhealthy ECS Task", "S3 Bucket Access Denied", "Lambda Cold Start Spike",
+    ]
+    crits = ["CRITICAL","CRITICAL","HIGH","HIGH","HIGH","MEDIUM","MEDIUM","MEDIUM","LOW","INFO"]
     issues = []
     base = datetime.now()
     for i in range(1, 31):
@@ -207,66 +216,116 @@ def generate_issues():
             "type":        err,
             "criticality": crit,
             "timestamp":   dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "status":      random.choice(["Open", "Open", "In Progress", "Resolved"]),
-            "jira":        f"AC-{2000+i}" if random.random() > 0.3 else None,
-            "details":     f"Detected {err} in {src}. Occurrences: {random.randint(1,50)}. Affected requests: {random.randint(10,5000)}.",
-            "log_snippet": f'[ERROR] {dt.strftime("%H:%M:%S")} {src}: {err} - stack trace available in CloudWatch logs /aws/ecs/{src.lower().replace(" ","-")}',
+            "status":      random.choice(["Open","Open","In Progress","Resolved"]),
+            "jira":        None,
+            "details":     (
+                f"Automated detection: {err} observed in {src}.\n"
+                f"Occurrences in last 30 min: {random.randint(1,50)}. "
+                f"Affected requests: {random.randint(10,5000)}.\n"
+                f"First seen: {dt.strftime('%Y-%m-%d %H:%M:%S')}. "
+                f"Environment: Production (ca-central-1)."
+            ),
+            "log_snippet": (
+                f"[ERROR] {dt.strftime('%H:%M:%S')} [{src.lower().replace(' ','-')}] "
+                f"{err} — stack trace captured. "
+                f"CloudWatch: /aws/ecs/{src.lower().replace(' ','-')} "
+                f"RequestID: req-{random.randint(100000,999999)}"
+            ),
+            "recommended_action": {
+                "TimeoutException":                "Increase timeout threshold; check downstream service SLA.",
+                "ConnectionRefused":               "Verify service is running; check security group rules.",
+                "NullPointerException":            "Review latest deployment for null-safety regressions.",
+                "OutOfMemoryError":                "Scale ECS task memory; check for memory leaks.",
+                "HTTP 500 Internal Server Error":  "Check application logs; rollback last deployment if needed.",
+                "HTTP 503 Service Unavailable":    "Service overloaded; scale horizontally or add rate limiting.",
+                "DB Connection Pool Exhausted":    "Increase pool size in config; check for connection leaks.",
+                "SSL Certificate Expired":         "Renew SSL certificate immediately via ACM.",
+                "High CPU Usage (>90%)":           "Scale up instance type or add Auto Scaling policy.",
+                "Memory Leak Detected":            "Restart affected service; profile heap usage.",
+                "Disk Space Critical (<5%)":       "Archive old logs to S3; increase EBS volume.",
+                "Queue Backlog Exceeded Threshold":"Scale consumer instances; check consumer lag.",
+                "Circuit Breaker OPEN":            "Identify failing downstream; implement fallback response.",
+                "Unhealthy ECS Task":              "Check task logs in CloudWatch; force new deployment.",
+                "S3 Bucket Access Denied":         "Review IAM policy attached to service role.",
+                "Lambda Cold Start Spike":         "Enable Provisioned Concurrency for critical functions.",
+            }.get(err, "Review logs and escalate to on-call engineer."),
         })
     st.session_state.issues = sorted(issues, key=lambda x: (
         {"CRITICAL":0,"HIGH":1,"MEDIUM":2,"LOW":3,"INFO":4}[x["criticality"]], x["timestamp"]
     ))
     return st.session_state.issues
 
+
 def generate_logs():
     if st.session_state.logs:
         return st.session_state.logs
     random.seed(99)
     levels   = ["ERROR","ERROR","WARN","INFO","INFO","INFO","DEBUG"]
-    services = ["ndc-api","booking-engine","payment-gw","auth-service","ecs-worker","lambda-processor"]
+    services = [
+        "booking-engine","payment-gateway","auth-service","ecs-worker",
+        "lambda-processor","api-gateway","notification-svc","cache-service",
+    ]
     messages = [
-        "Request timeout after 30000ms", "Connection pool exhausted (max=50)",
-        "Retry attempt 3/3 failed", "Response time exceeded SLA threshold",
-        "Successfully processed 1245 records", "Health check passed",
-        "Cache miss ratio: 45%", "DB query took 2341ms",
-        "SSL handshake failed", "Memory usage at 89%",
-        "Queue depth: 12450 messages", "Circuit breaker OPEN",
+        "Request timeout after 30000ms",
+        "Connection pool exhausted (max=50)",
+        "Retry attempt 3/3 failed — circuit breaker tripped",
+        "Response time exceeded SLA threshold (>2000ms)",
+        "Successfully processed 1245 records",
+        "Health check passed — all dependencies reachable",
+        "Cache miss ratio at 45% — consider warming strategy",
+        "DB query slow: 2341ms for SELECT on transactions table",
+        "SSL handshake failed with upstream service",
+        "Memory usage at 89% — approaching container limit",
+        "SQS queue depth: 12450 messages — consumer falling behind",
+        "Circuit breaker OPEN for payment-gateway",
+        "ECS task unhealthy — failing ALB health checks",
+        "S3 PutObject failed: AccessDenied on bucket prod-artifacts",
+        "Lambda duration: 28941ms — approaching 30s timeout",
+        "Auto Scaling triggered: scaling out from 2 to 4 tasks",
+        "RDS failover initiated — switching to replica",
+        "CloudWatch alarm state: ALARM for CPUUtilization",
+        "Kafka consumer lag: 85000 messages on topic prod-events",
+        "ALB 5xx error rate: 12.4% in last 5 minutes",
     ]
     logs = []
     base = datetime.now()
     for i in range(200):
         dt = base - timedelta(seconds=random.randint(0, 86400))
         logs.append({
-            "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "level":     random.choice(levels),
-            "service":   random.choice(services),
-            "message":   random.choice(messages),
+            "timestamp":  dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "level":      random.choice(levels),
+            "service":    random.choice(services),
+            "message":    random.choice(messages),
             "request_id": f"req-{random.randint(100000,999999)}",
         })
     st.session_state.logs = sorted(logs, key=lambda x: x["timestamp"], reverse=True)
     return st.session_state.logs
 
+
 def generate_aws_data():
     random.seed(77)
     return {
         "ec2": [
-            {"id":"i-0abc123","name":"ndc-api-prod-1","type":"t3.large","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
-            {"id":"i-0def456","name":"ndc-api-prod-2","type":"t3.large","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
-            {"id":"i-0ghi789","name":"booking-engine","type":"m5.xlarge","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
-            {"id":"i-0jkl012","name":"auth-service","type":"t3.medium","state":"stopped","cpu":0,"mem":0},
+            {"id":"i-0abc123","name":"booking-engine-prod-1","type":"t3.large","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
+            {"id":"i-0def456","name":"booking-engine-prod-2","type":"t3.large","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
+            {"id":"i-0ghi789","name":"payment-gateway-prod","type":"m5.xlarge","state":"running","cpu":random.randint(20,85),"mem":random.randint(40,90)},
+            {"id":"i-0jkl012","name":"auth-service-prod","type":"t3.medium","state":"stopped","cpu":0,"mem":0},
         ],
         "rds": [
-            {"id":"db-prod-main","engine":"PostgreSQL 15","size":"db.r5.large","state":"available","connections":random.randint(20,100),"cpu":random.randint(10,60)},
+            {"id":"db-prod-primary","engine":"PostgreSQL 15","size":"db.r5.large","state":"available","connections":random.randint(20,100),"cpu":random.randint(10,60)},
             {"id":"db-prod-replica","engine":"PostgreSQL 15","size":"db.r5.large","state":"available","connections":random.randint(5,30),"cpu":random.randint(5,30)},
         ],
         "lambda": [
-            {"name":"ndc-processor","runtime":"Python 3.11","invocations":random.randint(1000,50000),"errors":random.randint(0,200),"duration_avg":random.randint(100,3000)},
-            {"name":"log-analyzer","runtime":"Python 3.11","invocations":random.randint(500,10000),"errors":random.randint(0,50),"duration_avg":random.randint(50,500)},
+            {"name":"log-analyzer","runtime":"Python 3.11","invocations":random.randint(1000,50000),"errors":random.randint(0,200),"duration_avg":random.randint(100,3000)},
+            {"name":"event-processor","runtime":"Python 3.11","invocations":random.randint(500,10000),"errors":random.randint(0,50),"duration_avg":random.randint(50,500)},
             {"name":"jira-notifier","runtime":"Node.js 20","invocations":random.randint(100,2000),"errors":random.randint(0,20),"duration_avg":random.randint(200,800)},
+            {"name":"email-dispatcher","runtime":"Python 3.11","invocations":random.randint(200,3000),"errors":random.randint(0,15),"duration_avg":random.randint(80,400)},
         ],
         "ecs": [
-            {"cluster":"prod-cluster","service":"ndc-api","desired":4,"running":4,"cpu":random.randint(30,70)},
-            {"cluster":"prod-cluster","service":"booking-engine","desired":2,"running":2,"cpu":random.randint(20,60)},
-            {"cluster":"prod-cluster","service":"payment-gw","desired":2,"running":1,"cpu":random.randint(60,95)},
+            {"cluster":"prod-cluster","service":"booking-engine","desired":4,"running":4,"cpu":random.randint(30,70)},
+            {"cluster":"prod-cluster","service":"payment-gateway","desired":2,"running":2,"cpu":random.randint(20,60)},
+            {"cluster":"prod-cluster","service":"auth-service","desired":2,"running":1,"cpu":random.randint(60,95)},
+            {"cluster":"prod-cluster","service":"notification-svc","desired":2,"running":2,"cpu":random.randint(10,40)},
         ],
     }
 
@@ -281,30 +340,50 @@ def create_jira_ticket(issue: dict) -> tuple[bool, str]:
         jira_user  = st.secrets.get("JIRA_USER", "")
         jira_token = st.secrets.get("JIRA_TOKEN", "")
         jira_proj  = st.secrets.get("JIRA_PROJECT", "AC")
+
+        priority_map = {"CRITICAL":"Highest","HIGH":"High","MEDIUM":"Medium","LOW":"Low","INFO":"Lowest"}
+        description_text = (
+            f"Issue ID: {issue['id']}\n"
+            f"Source System: {issue['source']}\n"
+            f"Error Type: {issue['type']}\n"
+            f"Criticality: {issue['criticality']}\n"
+            f"Detected At: {issue['timestamp']}\n\n"
+            f"Details:\n{issue['details']}\n\n"
+            f"Log Snippet:\n{issue['log_snippet']}\n\n"
+            f"Recommended Action:\n{issue.get('recommended_action','Review and escalate.')}\n\n"
+            f"---\nAuto-created by Air Canada Support System (Infosys)"
+        )
+        summary = f"[{issue['criticality']}] {issue['title']}"
+
         if not all([jira_url, jira_user, jira_token]):
-            # Demo mode
+            # Demo mode — simulate ticket
             ticket_id = f"AC-{random.randint(3000,9999)}"
+            jira_link = f"https://yourcompany.atlassian.net/browse/{ticket_id}"
             st.session_state.jira_tickets.append({
-                "ticket": ticket_id, "issue_id": issue["id"],
-                "title": issue["title"], "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "status": "Demo (no Jira config)",
+                "ticket":      ticket_id,
+                "issue_id":    issue["id"],
+                "title":       summary,
+                "source":      issue["source"],
+                "criticality": issue["criticality"],
+                "created":     datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "status":      "Demo (configure Jira secrets)",
+                "jira_url":    jira_link,
+                "description": description_text,
+                "priority":    priority_map.get(issue["criticality"],"Medium"),
+                "mode":        "demo",
             })
             return True, ticket_id
-        priority_map = {"CRITICAL":"Highest","HIGH":"High","MEDIUM":"Medium","LOW":"Low","INFO":"Lowest"}
+
         payload = {
             "fields": {
                 "project":     {"key": jira_proj},
-                "summary":     f"[{issue['criticality']}] {issue['title']}",
+                "summary":     summary,
                 "description": {
                     "type": "doc", "version": 1,
-                    "content": [{"type":"paragraph","content":[{"type":"text","text":
-                        f"Issue ID: {issue['id']}\nSource: {issue['source']}\n"
-                        f"Detected: {issue['timestamp']}\n\nDetails:\n{issue['details']}\n\n"
-                        f"Log Snippet:\n{issue['log_snippet']}"
-                    }]}]
+                    "content": [{"type":"paragraph","content":[{"type":"text","text": description_text}]}]
                 },
                 "issuetype": {"name": "Bug"},
-                "priority":  {"name": priority_map.get(issue["criticality"], "Medium")},
+                "priority":  {"name": priority_map.get(issue["criticality"],"Medium")},
             }
         }
         resp = requests.post(
@@ -316,13 +395,22 @@ def create_jira_ticket(issue: dict) -> tuple[bool, str]:
         )
         if resp.status_code == 201:
             ticket_id = resp.json()["key"]
+            jira_link = f"{jira_url}/browse/{ticket_id}"
             st.session_state.jira_tickets.append({
-                "ticket": ticket_id, "issue_id": issue["id"],
-                "title": issue["title"], "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "status": "Created",
+                "ticket":      ticket_id,
+                "issue_id":    issue["id"],
+                "title":       summary,
+                "source":      issue["source"],
+                "criticality": issue["criticality"],
+                "created":     datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "status":      "Created",
+                "jira_url":    jira_link,
+                "description": description_text,
+                "priority":    priority_map.get(issue["criticality"],"Medium"),
+                "mode":        "live",
             })
             return True, ticket_id
-        return False, f"Jira API error: {resp.status_code}"
+        return False, f"Jira API error {resp.status_code}: {resp.text[:200]}"
     except Exception as e:
         return False, str(e)
 
@@ -337,43 +425,62 @@ def send_alert_email(issue: dict, jira_ticket: str = None) -> tuple[bool, str]:
         smtp_port = int(st.secrets.get("SMTP_PORT", 587))
         smtp_user = st.secrets.get("SMTP_USER", "")
         smtp_pass = st.secrets.get("SMTP_PASSWORD", "")
-        recipients_raw = st.secrets.get("ALERT_EMAILS", "") or st.session_state.alert_emails
+        recipients_raw = st.secrets.get("ALERT_EMAILS","") or st.session_state.alert_emails
         recipients = [e.strip() for e in recipients_raw.split(",") if e.strip()]
         if not recipients:
-            return False, "No recipient emails configured"
+            return False, "No recipient emails configured — add ALERT_EMAILS to secrets.toml or Settings tab"
+
         crit_emoji = {"CRITICAL":"🔴","HIGH":"🟠","MEDIUM":"🟡","LOW":"🔵","INFO":"🟢"}.get(issue["criticality"],"⚪")
         subject = f"{crit_emoji} [{issue['criticality']}] Air Canada Alert: {issue['title']}"
-        jira_line = f"\n\n🎫 Jira Ticket: {jira_ticket}" if jira_ticket else ""
-        body = f"""
-Air Canada Support System — Automated Alert
+        jira_line = f"\nJira Ticket:  {jira_ticket}\nJira URL:     https://yourcompany.atlassian.net/browse/{jira_ticket}" if jira_ticket else "\nJira Ticket:  Pending creation"
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Issue ID:    {issue['id']}
-Title:       {issue['title']}
-Criticality: {issue['criticality']}
-Source:      {issue['source']}
-Detected:    {issue['timestamp']}
-Status:      {issue['status']}
-{jira_line}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        body = f"""Air Canada Support System — Automated Incident Alert
+{'='*60}
 
-Details:
+INCIDENT SUMMARY
+----------------
+Issue ID:     {issue['id']}
+Title:        {issue['title']}
+Criticality:  {issue['criticality']}
+Source:       {issue['source']}
+Error Type:   {issue['type']}
+Detected:     {issue['timestamp']}
+Status:       {issue['status']}{jira_line}
+
+DETAILS
+-------
 {issue['details']}
 
-Log Snippet:
+LOG SNIPPET
+-----------
 {issue['log_snippet']}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-This is an automated alert from Air Canada Support System
-Powered by Infosys Travel & Hospitality
-        """.strip()
+RECOMMENDED ACTION
+------------------
+{issue.get('recommended_action', 'Review logs and escalate to on-call engineer.')}
+
+{'='*60}
+This alert was automatically generated by Air Canada Support System.
+Powered by Infosys Travel & Hospitality Initiative.
+Do not reply to this email — manage incidents in the dashboard."""
+
+        record = {
+            "issue_id":    issue["id"],
+            "subject":     subject,
+            "to":          ", ".join(recipients),
+            "criticality": issue["criticality"],
+            "source":      issue["source"],
+            "sent":        datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "body":        body,
+            "jira":        jira_ticket or "—",
+        }
+
         if not all([smtp_host, smtp_user, smtp_pass]):
-            st.session_state.email_log.append({
-                "to": ", ".join(recipients), "subject": subject,
-                "issue_id": issue["id"], "sent": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "status": "Demo (no SMTP config)",
-            })
-            return True, f"Demo email to {', '.join(recipients)}"
+            record["status"] = "Demo (configure SMTP secrets)"
+            record["mode"]   = "demo"
+            st.session_state.email_log.append(record)
+            return True, f"Demo — would send to: {', '.join(recipients)}"
+
         msg = MIMEMultipart()
         msg["From"]    = smtp_user
         msg["To"]      = ", ".join(recipients)
@@ -383,14 +490,39 @@ Powered by Infosys Travel & Hospitality
             server.starttls()
             server.login(smtp_user, smtp_pass)
             server.sendmail(smtp_user, recipients, msg.as_string())
-        st.session_state.email_log.append({
-            "to": ", ".join(recipients), "subject": subject,
-            "issue_id": issue["id"], "sent": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "status": "Sent",
-        })
+        record["status"] = "Sent"
+        record["mode"]   = "live"
+        st.session_state.email_log.append(record)
         return True, f"Email sent to {', '.join(recipients)}"
     except Exception as e:
         return False, str(e)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTO-PROCESSING — runs once per session on login
+# ══════════════════════════════════════════════════════════════════════════════
+
+def auto_process_issues():
+    """Auto-create Jira + send email for CRITICAL/HIGH open issues not yet processed."""
+    if not st.session_state.get("auto_jira") and not st.session_state.get("auto_email"):
+        return
+    issues = generate_issues()
+    for issue in issues:
+        if issue["id"] in st.session_state.auto_processed_ids:
+            continue
+        if issue["criticality"] not in ("CRITICAL","HIGH"):
+            continue
+        if issue["status"] == "Resolved":
+            continue
+        jira_ticket = None
+        if st.session_state.auto_jira and not issue.get("jira"):
+            ok, result = create_jira_ticket(issue)
+            if ok:
+                issue["jira"] = result
+                jira_ticket   = result
+        if st.session_state.auto_email:
+            send_alert_email(issue, jira_ticket or issue.get("jira"))
+        st.session_state.auto_processed_ids.add(issue["id"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -637,8 +769,8 @@ def render_log_monitor():
         new_log = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "level": random.choice(["ERROR","ERROR","WARN","INFO"]),
-            "service": random.choice(["ndc-api","booking-engine","payment-gw"]),
-            "message": random.choice(["Request timeout after 30000ms","Connection pool exhausted","Circuit breaker OPEN"]),
+            "service": random.choice(["booking-engine","payment-gateway","auth-service","api-gateway"]),
+            "message": random.choice(["Request timeout after 30000ms","Connection pool exhausted","Circuit breaker OPEN","Memory usage at 89%"]),
             "request_id": f"req-{random.randint(100000,999999)}",
         }
         st.session_state.logs.insert(0, new_log)
@@ -865,11 +997,12 @@ def render_ai_chat():
                 import anthropic
                 client = anthropic.Anthropic(api_key=api_key)
                 system_prompt = (
-                    f"You are an expert Site Reliability Engineer for Air Canada's IT systems. "
-                    f"You monitor NDC airline distribution systems, AWS infrastructure, and application logs. "
+                    f"You are an expert Site Reliability Engineer for Air Canada's enterprise IT systems. "
+                    f"You monitor AWS infrastructure, application logs, booking systems, payment gateways, "
+                    f"auth services, and event-driven microservices. "
                     f"Current system context: {ctx_summary} "
-                    f"Provide concise, actionable advice. Use emojis sparingly. "
-                    f"When suggesting fixes, give specific commands or steps."
+                    f"Provide concise, actionable advice with specific AWS CLI commands or steps where relevant. "
+                    f"When discussing incidents, reference the issue ID and recommend concrete remediation."
                 )
                 msgs = [{"role":m["role"],"content":m["content"]}
                         for m in st.session_state.chat_history if m["role"]!="assistant"
@@ -886,11 +1019,11 @@ def render_ai_chat():
         else:
             # Demo responses
             demo = {
-                "critical": f"🔴 There are {len(open_critical)} CRITICAL issues open. Most urgent: **{open_critical[0]['title'] if open_critical else 'None'}**. Recommend immediate escalation and Jira triage.",
-                "aws":      "☁️ AWS overview: EC2 instances are mostly healthy. ECS payment-gw service has degraded task count (1/2 running) — recommend checking CloudWatch logs for OOM or crash loops.",
-                "log":      "📋 Log pattern analysis: Main error cluster is TimeoutException in NDC API (32% of errors). Suggest checking downstream dependency health and increasing connection pool size.",
-                "jira":     f"🎫 Jira status: {len(st.session_state.jira_tickets)} tickets created this session. All CRITICAL issues should have associated tickets.",
-                "help":     "I can help with: issue triage, log analysis, AWS health checks, runbook guidance, and incident reports. Try asking 'summarize current critical issues' or 'what should I fix first?'",
+                "critical": f"🔴 There are {len(open_critical)} CRITICAL issues open. Most urgent: **{open_critical[0]['title'] if open_critical else 'None'}**. Recommend immediate escalation — auto Jira ticket should already be created. Check the Jira & Email Log tab.",
+                "aws":      "☁️ AWS overview: auth-service ECS has degraded task count (1/2 running) — likely OOM crash loop. Run: `aws ecs describe-tasks --cluster prod-cluster --service auth-service` to get task ARN, then check CloudWatch logs.",
+                "log":      "📋 Log pattern analysis: Main error cluster is TimeoutException in booking-engine and circuit breaker OPEN events in payment-gateway. Recommend checking downstream dependency health and reviewing connection pool settings.",
+                "jira":     f"🎫 Jira status: {len(st.session_state.jira_tickets)} tickets created this session ({sum(1 for t in st.session_state.jira_tickets if t.get('mode')=='live')} live). All CRITICAL/HIGH issues should be auto-ticketed — check Jira & Email Log for details.",
+                "help":     "I can help with: issue triage, log analysis, AWS health checks, runbook guidance, and incident reports. Try: 'summarize critical issues', 'what should I fix first?', 'give me a runbook for circuit breaker OPEN', or 'draft an incident report'.",
             }
             q = user_input.lower()
             if any(w in q for w in ["critical","urgent","priority"]):  reply = demo["critical"]
@@ -915,25 +1048,80 @@ def render_notifications():
     st.markdown("""
     <div class="page-banner">
         <h2>🎫 Jira & Email Log</h2>
-        <p>Track created Jira tickets and sent alert emails</p>
+        <p>Full details of auto-created Jira tickets and alert emails sent by the system</p>
     </div>
     """, unsafe_allow_html=True)
 
-    t1, t2 = st.tabs(["🎫 Jira Tickets", "📧 Email Log"])
+    t1, t2 = st.tabs([f"🎫 Jira Tickets ({len(st.session_state.jira_tickets)})",
+                       f"📧 Email Log ({len(st.session_state.email_log)})"])
 
     with t1:
-        if st.session_state.jira_tickets:
-            st.dataframe(pd.DataFrame(st.session_state.jira_tickets),
-                         use_container_width=True, hide_index=True)
+        if not st.session_state.jira_tickets:
+            st.info("No Jira tickets yet. The system auto-creates tickets for CRITICAL/HIGH issues on login when 'Auto-create Jira' is enabled. You can also create manually from the Issues Dashboard.")
         else:
-            st.info("No Jira tickets created yet. Go to Issues Dashboard and click 'Create Jira'.")
+            # Summary counts
+            live_count = sum(1 for t in st.session_state.jira_tickets if t.get("mode")=="live")
+            demo_count = len(st.session_state.jira_tickets) - live_count
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Tickets", len(st.session_state.jira_tickets))
+            c2.metric("Live (Real Jira)", live_count)
+            c3.metric("Demo Mode", demo_count)
+            st.markdown("---")
+
+            for t in reversed(st.session_state.jira_tickets):
+                crit  = t.get("criticality","—")
+                color = CRIT_COLORS.get(crit, "#555")
+                mode_badge = "🟢 LIVE" if t.get("mode")=="live" else "🔵 DEMO"
+                with st.expander(f"🎫 {t['ticket']} — {t['title'][:70]}...", expanded=False):
+                    col_l, col_r = st.columns([2,1])
+                    with col_l:
+                        st.markdown(f"""
+                        <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+                            <span class="badge-{crit.lower()}">{crit}</span>
+                            <span style="font-size:0.72rem; background:#F1F5F9; padding:3px 10px;
+                                         border-radius:12px; color:#475569;">{mode_badge}</span>
+                            <span style="font-size:0.72rem; color:#64748B;">📍 {t.get('source','—')}</span>
+                            <span style="font-size:0.72rem; color:#64748B;">🕐 {t.get('created','—')}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        st.markdown(f"**Priority:** {t.get('priority','—')} &nbsp;|&nbsp; **Status:** {t.get('status','—')} &nbsp;|&nbsp; **Issue ID:** `{t.get('issue_id','—')}`")
+                        if t.get("jira_url"):
+                            st.markdown(f"🔗 **Jira URL:** [{t['ticket']}]({t['jira_url']})")
+                    with col_r:
+                        if t.get("jira_url") and t.get("mode")=="live":
+                            st.link_button("Open in Jira ↗", t["jira_url"])
+
+                    st.markdown("**📋 Full Description sent to Jira:**")
+                    st.code(t.get("description","—"), language="text")
 
     with t2:
-        if st.session_state.email_log:
-            st.dataframe(pd.DataFrame(st.session_state.email_log),
-                         use_container_width=True, hide_index=True)
+        if not st.session_state.email_log:
+            st.info("No emails sent yet. The system auto-sends email alerts for CRITICAL/HIGH issues when 'Auto-send Email' is enabled and recipients are configured.")
         else:
-            st.info("No emails sent yet. Emails are sent automatically when Auto-send Email is enabled.")
+            live_emails = sum(1 for e in st.session_state.email_log if e.get("mode")=="live")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Emails", len(st.session_state.email_log))
+            c2.metric("Actually Sent", live_emails)
+            c3.metric("Demo Mode", len(st.session_state.email_log) - live_emails)
+            st.markdown("---")
+
+            for e in reversed(st.session_state.email_log):
+                crit  = e.get("criticality","—")
+                mode_badge = "🟢 SENT" if e.get("mode")=="live" else "🔵 DEMO"
+                with st.expander(f"📧 {e.get('subject','—')[:80]}", expanded=False):
+                    st.markdown(f"""
+                    <div style="display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+                        <span class="badge-{crit.lower() if crit in CRIT_COLORS else 'info'}">{crit}</span>
+                        <span style="font-size:0.72rem; background:#F1F5F9; padding:3px 10px;
+                                     border-radius:12px; color:#475569;">{mode_badge}</span>
+                        <span style="font-size:0.72rem; color:#64748B;">🕐 {e.get('sent','—')}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.markdown(f"**To:** `{e.get('to','—')}`")
+                    st.markdown(f"**Subject:** {e.get('subject','—')}")
+                    st.markdown(f"**Issue:** `{e.get('issue_id','—')}` &nbsp;|&nbsp; **Jira:** `{e.get('jira','—')}` &nbsp;|&nbsp; **Status:** {e.get('status','—')}")
+                    st.markdown("**📨 Full Email Body:**")
+                    st.code(e.get("body","—"), language="text")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1067,6 +1255,9 @@ def main():
         return
 
     render_sidebar()
+
+    # Auto-process: create Jira + send email for new CRITICAL/HIGH issues
+    auto_process_issues()
 
     # Main header
     st.markdown(f"""
