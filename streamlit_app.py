@@ -148,126 +148,194 @@ DEFAULT_ALERT_RULES = [
 # ══════════════════════════════════════════════════════════════════════════════
 
 APPLICATIONS = [
-    {"id": "airport",     "name": "Airport",               "icon": "✈️",  "description": "Airport operations, gate management & passenger flow"},
-    {"id": "cargo",       "name": "Cargo",                 "icon": "📦",  "description": "Cargo booking, tracking & capacity management"},
-    {"id": "ccare",       "name": "Customer Care",         "icon": "🎧",  "description": "Contact centre, case management & customer resolution"},
-    {"id": "fintax",      "name": "Finance Tax & Audit",   "icon": "💰",  "description": "Financial reporting, tax compliance & audit trails"},
-    {"id": "fops",        "name": "FOPS",                  "icon": "🛫",  "description": "Flight operations, dispatch & crew coordination"},
-    {"id": "hr",          "name": "HR System",             "icon": "👥",  "description": "Human resources, payroll & workforce management"},
-    {"id": "loyalty",     "name": "Loyalty",               "icon": "⭐",  "description": "Aeroplan, points management & member services"},
-    {"id": "intplat",     "name": "Integrated Platform",   "icon": "🔗",  "description": "Middleware, API hub & enterprise integration layer"},
-    {"id": "pss",         "name": "PSS",                   "icon": "🖥️",  "description": "Passenger service system — reservations & check-in"},
-    {"id": "sbm",         "name": "Shop-Book-Manage",      "icon": "🛒",  "description": "Digital commerce — search, booking & self-service"},
-    {"id": "ops",         "name": "OPS",                   "icon": "⚙️",  "description": "Operational control — scheduling, resources & events"},
+    {"id": "airport",  "name": "Airport",              "icon": "✈️",  "description": "Airport operations, gate management & passenger flow"},
+    {"id": "cargo",    "name": "Cargo",                "icon": "📦",  "description": "Cargo booking, tracking & capacity management"},
+    {"id": "ccare",    "name": "Customer Care",        "icon": "🎧",  "description": "Contact centre, case management & customer resolution"},
+    {"id": "fintax",   "name": "Finance Tax & Audit",  "icon": "💰",  "description": "Financial reporting, tax compliance & audit trails"},
+    {"id": "fops",     "name": "FOPS",                 "icon": "🛫",  "description": "Flight operations, dispatch & crew coordination"},
+    {"id": "hr",       "name": "HR System",            "icon": "👥",  "description": "Human resources, payroll & workforce management"},
+    {"id": "loyalty",  "name": "Loyalty",              "icon": "⭐",  "description": "Aeroplan, points management & member services"},
+    {"id": "intplat",  "name": "Integrated Platform",  "icon": "🔗",  "description": "Middleware, API hub & enterprise integration layer"},
+    {"id": "pss",      "name": "PSS",                  "icon": "🖥️",  "description": "Passenger service system — reservations & check-in"},
+    {"id": "sbm",      "name": "Shop-Book-Manage",     "icon": "🛒",  "description": "Digital commerce — search, booking & self-service"},
+    {"id": "ops",      "name": "OPS",                  "icon": "⚙️",  "description": "Operational control — scheduling, resources & events"},
 ]
 
-# Health index thresholds (same across all apps, tunable per app in future)
-HEALTH_THRESHOLDS = {
-    "cpu_warn":        75,    # % — above = amber flag
-    "cpu_crit":        90,    # % — above = red flag
-    "mem_warn":        80,    # % — above = amber flag
-    "mem_crit":        92,    # % — above = red flag
-    "disk_warn":       80,    # % — above = amber flag
-    "disk_crit":       95,    # % — above = red flag
-    "error_rate_warn":  3,    # % of requests — above = amber
-    "error_rate_crit": 10,    # % — above = red
-    "resp_time_warn": 2000,   # ms — above = amber
-    "resp_time_crit": 5000,   # ms — above = red
-    "open_crit_warn":   1,    # # of open CRITICAL issues — above = amber
-    "open_crit_crit":   3,    # above = red
+# ── Default thresholds — stored in session state so admins can edit them ─────
+DEFAULT_APP_THRESHOLDS = {
+    # Each app can override; falls back to these defaults
+    "cpu_warn":         75,    # % CPU utilisation — Amber above this
+    "cpu_crit":         90,    # % CPU utilisation — Red above this
+    "mem_warn":         80,    # % Memory usage   — Amber above this
+    "mem_crit":         92,    # % Memory usage   — Red above this
+    "disk_warn":        80,    # % Disk usage      — Amber above this
+    "disk_crit":        95,    # % Disk usage      — Red above this
+    "error_rate_warn":   3,    # % Error rate      — Amber above this
+    "error_rate_crit":  10,    # % Error rate      — Red above this
+    "resp_time_warn": 2000,    # ms Response time  — Amber above this
+    "resp_time_crit": 5000,    # ms Response time  — Red above this
+    "open_crit_warn":    1,    # # Open CRITICAL issues — Amber if ≥ this
+    "open_crit_crit":    3,    # # Open CRITICAL issues — Red if ≥ this
 }
 
-def _seed_for_app(app_id: str) -> int:
-    """Stable seed per app so metrics don't flicker on rerun."""
-    return sum(ord(c) for c in app_id)
+def get_thresholds() -> dict:
+    """Return current thresholds — user edits stored in session state."""
+    if "health_thresholds" not in st.session_state:
+        st.session_state.health_thresholds = DEFAULT_APP_THRESHOLDS.copy()
+    return st.session_state.health_thresholds
+
+# ── Pre-defined realistic metric profiles — 5 GREEN, 3 AMBER, 3 RED ─────────
+# This gives a realistic fleet picture rather than random chaos.
+# Values are (cpu, mem, disk, error_rate, resp_time, uptime, open_crit, open_high, throughput)
+_APP_PROFILES = {
+    # GREEN — healthy, within all thresholds
+    "cargo":   dict(cpu=42, mem=58, disk=61, error_rate=0.8, resp_time=420,  uptime=99.95, open_crit=0, open_high=1,  throughput=1200),
+    "fintax":  dict(cpu=28, mem=45, disk=52, error_rate=0.3, resp_time=310,  uptime=99.99, open_crit=0, open_high=0,  throughput=380),
+    "hr":      dict(cpu=35, mem=52, disk=48, error_rate=0.5, resp_time=280,  uptime=99.97, open_crit=0, open_high=1,  throughput=640),
+    "loyalty": dict(cpu=61, mem=67, disk=55, error_rate=1.4, resp_time=890,  uptime=99.91, open_crit=0, open_high=2,  throughput=5200),
+    "ops":     dict(cpu=48, mem=63, disk=59, error_rate=1.1, resp_time=650,  uptime=99.88, open_crit=0, open_high=1,  throughput=920),
+    # AMBER — one or more metrics in warning zone
+    "airport": dict(cpu=78, mem=74, disk=71, error_rate=4.2, resp_time=2400, uptime=99.72, open_crit=1, open_high=4,  throughput=3100),
+    "ccare":   dict(cpu=71, mem=82, disk=68, error_rate=2.8, resp_time=1850, uptime=99.65, open_crit=1, open_high=5,  throughput=2800),
+    "sbm":     dict(cpu=74, mem=76, disk=73, error_rate=5.1, resp_time=2800, uptime=99.58, open_crit=2, open_high=6,  throughput=8400),
+    # RED — multiple metrics breaching critical thresholds
+    "fops":    dict(cpu=93, mem=88, disk=82, error_rate=12.4,resp_time=5800, uptime=98.21, open_crit=4, open_high=9,  throughput=1800),
+    "intplat": dict(cpu=91, mem=94, disk=78, error_rate=15.7,resp_time=6200, uptime=97.84, open_crit=5, open_high=11, throughput=4500),
+    "pss":     dict(cpu=87, mem=91, disk=88, error_rate=11.2,resp_time=7100, uptime=98.63, open_crit=3, open_high=8,  throughput=6100),
+}
 
 def generate_app_health(app_id: str) -> dict:
     """
-    Generate stable, realistic health metrics for one application and
-    compute an overall health index (GREEN / AMBER / RED) plus a numeric score 0-100.
+    Compute health metrics and overall status (GREEN / AMBER / RED)
+    for a single application using pre-defined realistic profiles.
+    Thresholds come from session state so they are editable by admins.
     """
     if app_id in st.session_state.app_health_cache:
         return st.session_state.app_health_cache[app_id]
 
-    rng = random.Random(_seed_for_app(app_id))
+    T   = get_thresholds()
+    rng = random.Random(sum(ord(c) for c in app_id) + 1)  # tiny jitter for last_deploy only
 
-    # Generate raw metrics
-    cpu        = rng.randint(15, 97)
-    mem        = rng.randint(30, 95)
-    disk       = rng.randint(20, 98)
-    error_rate = round(rng.uniform(0.1, 18.0), 1)
-    resp_time  = rng.randint(120, 7500)
-    uptime     = round(rng.uniform(94.0, 99.99), 2)
-    open_crit  = rng.randint(0, 6)
-    open_high  = rng.randint(0, 12)
-    throughput = rng.randint(50, 8000)   # req/min
-    last_deploy= (datetime.now() - timedelta(days=rng.randint(0,30),
-                                             hours=rng.randint(0,23))).strftime("%Y-%m-%d %H:%M")
+    p = _APP_PROFILES.get(app_id, _APP_PROFILES["ops"])   # fallback
 
-    T = HEALTH_THRESHOLDS
+    cpu        = p["cpu"]
+    mem        = p["mem"]
+    disk       = p["disk"]
+    error_rate = p["error_rate"]
+    resp_time  = p["resp_time"]
+    uptime     = p["uptime"]
+    open_crit  = p["open_crit"]
+    open_high  = p["open_high"]
+    throughput = p["throughput"]
+    last_deploy = (datetime.now() - timedelta(
+        days=rng.randint(0, 20), hours=rng.randint(0, 23)
+    )).strftime("%Y-%m-%d %H:%M")
 
-    # Score each metric: 0 = healthy, 1 = amber, 2 = red
     def score(val, warn, crit):
         if val >= crit: return 2
         if val >= warn: return 1
         return 0
 
-    scores = [
-        score(cpu,        T["cpu_warn"],        T["cpu_crit"]),
-        score(mem,        T["mem_warn"],        T["mem_crit"]),
-        score(disk,       T["disk_warn"],       T["disk_crit"]),
-        score(error_rate, T["error_rate_warn"], T["error_rate_crit"]),
-        score(resp_time,  T["resp_time_warn"],  T["resp_time_crit"]),
-        score(open_crit,  T["open_crit_warn"],  T["open_crit_crit"]),
-    ]
+    metric_scores = {
+        "CPU Utilisation":  score(cpu,        T["cpu_warn"],        T["cpu_crit"]),
+        "Memory Usage":     score(mem,        T["mem_warn"],        T["mem_crit"]),
+        "Disk Usage":       score(disk,       T["disk_warn"],       T["disk_crit"]),
+        "Error Rate":       score(error_rate, T["error_rate_warn"], T["error_rate_crit"]),
+        "Response Time":    score(resp_time,  T["resp_time_warn"],  T["resp_time_crit"]),
+        "Open Critical":    score(open_crit,  T["open_crit_warn"],  T["open_crit_crit"]),
+    }
 
-    red_count   = scores.count(2)
-    amber_count = scores.count(1)
+    red_n   = sum(1 for v in metric_scores.values() if v == 2)
+    amber_n = sum(1 for v in metric_scores.values() if v == 1)
 
-    # Overall status
-    if red_count >= 2 or (red_count == 1 and amber_count >= 2):
+    if red_n >= 2 or (red_n == 1 and amber_n >= 2):
         status = "RED"
-    elif red_count == 1 or amber_count >= 2:
+    elif red_n == 1 or amber_n >= 2:
         status = "AMBER"
     else:
         status = "GREEN"
 
-    # Numeric health index 0-100 (100 = perfect)
-    deductions = red_count * 25 + amber_count * 10
-    health_index = max(0, 100 - deductions)
+    health_index = max(0, 100 - red_n * 25 - amber_n * 10)
+
+    # Human-readable metric table for the detail panel
+    metric_detail = [
+        {
+            "Metric":            "CPU Utilisation",
+            "Current Value":     f"{cpu}%",
+            "Warn Threshold":    f"≥ {T['cpu_warn']}%",
+            "Crit Threshold":    f"≥ {T['cpu_crit']}%",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["CPU Utilisation"]],
+        },
+        {
+            "Metric":            "Memory Usage",
+            "Current Value":     f"{mem}%",
+            "Warn Threshold":    f"≥ {T['mem_warn']}%",
+            "Crit Threshold":    f"≥ {T['mem_crit']}%",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["Memory Usage"]],
+        },
+        {
+            "Metric":            "Disk Usage",
+            "Current Value":     f"{disk}%",
+            "Warn Threshold":    f"≥ {T['disk_warn']}%",
+            "Crit Threshold":    f"≥ {T['disk_crit']}%",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["Disk Usage"]],
+        },
+        {
+            "Metric":            "Error Rate",
+            "Current Value":     f"{error_rate}%",
+            "Warn Threshold":    f"≥ {T['error_rate_warn']}%",
+            "Crit Threshold":    f"≥ {T['error_rate_crit']}%",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["Error Rate"]],
+        },
+        {
+            "Metric":            "Response Time",
+            "Current Value":     f"{resp_time} ms",
+            "Warn Threshold":    f"≥ {T['resp_time_warn']} ms",
+            "Crit Threshold":    f"≥ {T['resp_time_crit']} ms",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["Response Time"]],
+        },
+        {
+            "Metric":            "Open Critical Issues",
+            "Current Value":     str(open_crit),
+            "Warn Threshold":    f"≥ {T['open_crit_warn']}",
+            "Crit Threshold":    f"≥ {T['open_crit_crit']}",
+            "Status":            ["🟢 OK","🟡 Warning","🔴 Critical"][metric_scores["Open Critical"]],
+        },
+    ]
 
     result = {
-        "app_id":       app_id,
-        "status":       status,
-        "health_index": health_index,
-        "cpu":          cpu,
-        "mem":          mem,
-        "disk":         disk,
-        "error_rate":   error_rate,
-        "resp_time":    resp_time,
-        "uptime":       uptime,
-        "open_crit":    open_crit,
-        "open_high":    open_high,
-        "throughput":   throughput,
-        "last_deploy":  last_deploy,
-        "scores":       scores,        # per-metric flags
+        "app_id":        app_id,
+        "status":        status,
+        "health_index":  health_index,
+        "cpu":           cpu,
+        "mem":           mem,
+        "disk":          disk,
+        "error_rate":    error_rate,
+        "resp_time":     resp_time,
+        "uptime":        uptime,
+        "open_crit":     open_crit,
+        "open_high":     open_high,
+        "throughput":    throughput,
+        "last_deploy":   last_deploy,
+        "metric_scores": metric_scores,
+        "metric_detail": metric_detail,
     }
     st.session_state.app_health_cache[app_id] = result
     return result
 
 
 def fleet_summary() -> dict:
-    """Aggregate health across all 11 apps."""
     healths = [generate_app_health(a["id"]) for a in APPLICATIONS]
     return {
-        "total":   len(healths),
-        "green":   sum(1 for h in healths if h["status"] == "GREEN"),
-        "amber":   sum(1 for h in healths if h["status"] == "AMBER"),
-        "red":     sum(1 for h in healths if h["status"] == "RED"),
-        "avg_index": round(sum(h["health_index"] for h in healths) / len(healths)),
-        "total_crit": sum(h["open_crit"] for h in healths),
-        "total_high": sum(h["open_high"] for h in healths),
+        "total":       len(healths),
+        "green":       sum(1 for h in healths if h["status"] == "GREEN"),
+        "amber":       sum(1 for h in healths if h["status"] == "AMBER"),
+        "red":         sum(1 for h in healths if h["status"] == "RED"),
+        "avg_index":   round(sum(h["health_index"] for h in healths) / len(healths)),
+        "total_crit":  sum(h["open_crit"] for h in healths),
+        "total_high":  sum(h["open_high"] for h in healths),
     }
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -833,7 +901,7 @@ def render_master_dashboard():
     st.markdown("---")
     st.markdown("<div style='font-size:0.72rem;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;'>All Applications — Click to open detailed dashboard</div>", unsafe_allow_html=True)
 
-    T = HEALTH_THRESHOLDS
+    T = get_thresholds()
 
     def metric_badge(val, warn, crit, unit="", prefix=""):
         if val >= crit:   clr, bg = "#C62828", "#FFEBEE"
@@ -896,6 +964,12 @@ def render_master_dashboard():
                     audit(f"APP_DRILLDOWN", f"Opened {app['name']} dashboard", "NAVIGATION")
                     st.rerun()
 
+                with st.expander(f"📊 Metric Details — {app['name']}", expanded=False):
+                    st.dataframe(
+                        pd.DataFrame(h["metric_detail"]),
+                        use_container_width=True, hide_index=True,
+                    )
+
         st.markdown("<br>", unsafe_allow_html=True)
 
     # Fleet summary table
@@ -919,6 +993,54 @@ def render_master_dashboard():
             "🟠 High":       h["open_high"],
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── Threshold Configuration Panel ────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("⚙️ Health Index Threshold Configuration — View & Edit", expanded=False):
+        T = get_thresholds()
+        st.markdown("""
+        These thresholds determine each application's status colour.
+        **Warning** = metric in amber zone. **Critical** = metric in red zone.
+        Changing these values clears the health cache and recalculates all statuses immediately.
+        """)
+        st.markdown("---")
+        c1,c2 = st.columns(2)
+        with c1:
+            st.markdown("**Infrastructure Thresholds**")
+            new_cpu_w  = st.number_input("CPU Warn (%)",        min_value=50,  max_value=95,  value=T["cpu_warn"],        step=5,  key="t_cpu_w")
+            new_cpu_c  = st.number_input("CPU Critical (%)",    min_value=60,  max_value=100, value=T["cpu_crit"],        step=5,  key="t_cpu_c")
+            new_mem_w  = st.number_input("Memory Warn (%)",     min_value=50,  max_value=95,  value=T["mem_warn"],        step=5,  key="t_mem_w")
+            new_mem_c  = st.number_input("Memory Critical (%)", min_value=60,  max_value=100, value=T["mem_crit"],        step=5,  key="t_mem_c")
+            new_dsk_w  = st.number_input("Disk Warn (%)",       min_value=50,  max_value=95,  value=T["disk_warn"],       step=5,  key="t_dsk_w")
+            new_dsk_c  = st.number_input("Disk Critical (%)",   min_value=60,  max_value=100, value=T["disk_crit"],       step=5,  key="t_dsk_c")
+        with c2:
+            st.markdown("**Application Thresholds**")
+            new_err_w  = st.number_input("Error Rate Warn (%)",    min_value=1,   max_value=20,  value=T["error_rate_warn"], step=1,  key="t_err_w")
+            new_err_c  = st.number_input("Error Rate Critical (%)",min_value=2,   max_value=50,  value=T["error_rate_crit"], step=1,  key="t_err_c")
+            new_rt_w   = st.number_input("Response Time Warn (ms)",min_value=500, max_value=10000,value=T["resp_time_warn"],step=250,key="t_rt_w")
+            new_rt_c   = st.number_input("Response Time Crit (ms)",min_value=1000,max_value=30000,value=T["resp_time_crit"],step=500,key="t_rt_c")
+            new_oc_w   = st.number_input("Open Critical Warn (count)", min_value=0, max_value=10, value=T["open_crit_warn"], step=1, key="t_oc_w")
+            new_oc_c   = st.number_input("Open Critical Crit (count)", min_value=1, max_value=20, value=T["open_crit_crit"], step=1, key="t_oc_c")
+
+        if st.button("💾 Apply Thresholds & Recalculate", type="primary"):
+            st.session_state.health_thresholds = {
+                "cpu_warn": new_cpu_w, "cpu_crit": new_cpu_c,
+                "mem_warn": new_mem_w, "mem_crit": new_mem_c,
+                "disk_warn": new_dsk_w, "disk_crit": new_dsk_c,
+                "error_rate_warn": new_err_w, "error_rate_crit": new_err_c,
+                "resp_time_warn": new_rt_w, "resp_time_crit": new_rt_c,
+                "open_crit_warn": new_oc_w, "open_crit_crit": new_oc_c,
+            }
+            st.session_state.app_health_cache = {}
+            audit("THRESHOLD_UPDATED", "Health index thresholds reconfigured", "CONFIG")
+            st.success("✅ Thresholds updated — all application statuses recalculated")
+            st.rerun()
+
+        if st.button("↩️ Reset to Defaults"):
+            st.session_state.health_thresholds = DEFAULT_APP_THRESHOLDS.copy()
+            st.session_state.app_health_cache = {}
+            st.success("✅ Reset to default thresholds")
+            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
