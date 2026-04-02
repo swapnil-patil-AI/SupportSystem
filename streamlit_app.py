@@ -143,6 +143,132 @@ DEFAULT_ALERT_RULES = [
     {"id":"rule-005","name":"Lambda Timeout Spike","enabled":True,"service":"lambda-processor","level":"ERROR","threshold":5,"window_min":3,"criticality":"HIGH","action_jira":True,"action_email":False,"action_slack":True},
 ]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# APPLICATION CATALOGUE & HEALTH CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+
+APPLICATIONS = [
+    {"id": "airport",     "name": "Airport",               "icon": "✈️",  "description": "Airport operations, gate management & passenger flow"},
+    {"id": "cargo",       "name": "Cargo",                 "icon": "📦",  "description": "Cargo booking, tracking & capacity management"},
+    {"id": "ccare",       "name": "Customer Care",         "icon": "🎧",  "description": "Contact centre, case management & customer resolution"},
+    {"id": "fintax",      "name": "Finance Tax & Audit",   "icon": "💰",  "description": "Financial reporting, tax compliance & audit trails"},
+    {"id": "fops",        "name": "FOPS",                  "icon": "🛫",  "description": "Flight operations, dispatch & crew coordination"},
+    {"id": "hr",          "name": "HR System",             "icon": "👥",  "description": "Human resources, payroll & workforce management"},
+    {"id": "loyalty",     "name": "Loyalty",               "icon": "⭐",  "description": "Aeroplan, points management & member services"},
+    {"id": "intplat",     "name": "Integrated Platform",   "icon": "🔗",  "description": "Middleware, API hub & enterprise integration layer"},
+    {"id": "pss",         "name": "PSS",                   "icon": "🖥️",  "description": "Passenger service system — reservations & check-in"},
+    {"id": "sbm",         "name": "Shop-Book-Manage",      "icon": "🛒",  "description": "Digital commerce — search, booking & self-service"},
+    {"id": "ops",         "name": "OPS",                   "icon": "⚙️",  "description": "Operational control — scheduling, resources & events"},
+]
+
+# Health index thresholds (same across all apps, tunable per app in future)
+HEALTH_THRESHOLDS = {
+    "cpu_warn":        75,    # % — above = amber flag
+    "cpu_crit":        90,    # % — above = red flag
+    "mem_warn":        80,    # % — above = amber flag
+    "mem_crit":        92,    # % — above = red flag
+    "disk_warn":       80,    # % — above = amber flag
+    "disk_crit":       95,    # % — above = red flag
+    "error_rate_warn":  3,    # % of requests — above = amber
+    "error_rate_crit": 10,    # % — above = red
+    "resp_time_warn": 2000,   # ms — above = amber
+    "resp_time_crit": 5000,   # ms — above = red
+    "open_crit_warn":   1,    # # of open CRITICAL issues — above = amber
+    "open_crit_crit":   3,    # above = red
+}
+
+def _seed_for_app(app_id: str) -> int:
+    """Stable seed per app so metrics don't flicker on rerun."""
+    return sum(ord(c) for c in app_id)
+
+def generate_app_health(app_id: str) -> dict:
+    """
+    Generate stable, realistic health metrics for one application and
+    compute an overall health index (GREEN / AMBER / RED) plus a numeric score 0-100.
+    """
+    if app_id in st.session_state.app_health_cache:
+        return st.session_state.app_health_cache[app_id]
+
+    rng = random.Random(_seed_for_app(app_id))
+
+    # Generate raw metrics
+    cpu        = rng.randint(15, 97)
+    mem        = rng.randint(30, 95)
+    disk       = rng.randint(20, 98)
+    error_rate = round(rng.uniform(0.1, 18.0), 1)
+    resp_time  = rng.randint(120, 7500)
+    uptime     = round(rng.uniform(94.0, 99.99), 2)
+    open_crit  = rng.randint(0, 6)
+    open_high  = rng.randint(0, 12)
+    throughput = rng.randint(50, 8000)   # req/min
+    last_deploy= (datetime.now() - timedelta(days=rng.randint(0,30),
+                                             hours=rng.randint(0,23))).strftime("%Y-%m-%d %H:%M")
+
+    T = HEALTH_THRESHOLDS
+
+    # Score each metric: 0 = healthy, 1 = amber, 2 = red
+    def score(val, warn, crit):
+        if val >= crit: return 2
+        if val >= warn: return 1
+        return 0
+
+    scores = [
+        score(cpu,        T["cpu_warn"],        T["cpu_crit"]),
+        score(mem,        T["mem_warn"],        T["mem_crit"]),
+        score(disk,       T["disk_warn"],       T["disk_crit"]),
+        score(error_rate, T["error_rate_warn"], T["error_rate_crit"]),
+        score(resp_time,  T["resp_time_warn"],  T["resp_time_crit"]),
+        score(open_crit,  T["open_crit_warn"],  T["open_crit_crit"]),
+    ]
+
+    red_count   = scores.count(2)
+    amber_count = scores.count(1)
+
+    # Overall status
+    if red_count >= 2 or (red_count == 1 and amber_count >= 2):
+        status = "RED"
+    elif red_count == 1 or amber_count >= 2:
+        status = "AMBER"
+    else:
+        status = "GREEN"
+
+    # Numeric health index 0-100 (100 = perfect)
+    deductions = red_count * 25 + amber_count * 10
+    health_index = max(0, 100 - deductions)
+
+    result = {
+        "app_id":       app_id,
+        "status":       status,
+        "health_index": health_index,
+        "cpu":          cpu,
+        "mem":          mem,
+        "disk":         disk,
+        "error_rate":   error_rate,
+        "resp_time":    resp_time,
+        "uptime":       uptime,
+        "open_crit":    open_crit,
+        "open_high":    open_high,
+        "throughput":   throughput,
+        "last_deploy":  last_deploy,
+        "scores":       scores,        # per-metric flags
+    }
+    st.session_state.app_health_cache[app_id] = result
+    return result
+
+
+def fleet_summary() -> dict:
+    """Aggregate health across all 11 apps."""
+    healths = [generate_app_health(a["id"]) for a in APPLICATIONS]
+    return {
+        "total":   len(healths),
+        "green":   sum(1 for h in healths if h["status"] == "GREEN"),
+        "amber":   sum(1 for h in healths if h["status"] == "AMBER"),
+        "red":     sum(1 for h in healths if h["status"] == "RED"),
+        "avg_index": round(sum(h["health_index"] for h in healths) / len(healths)),
+        "total_crit": sum(h["open_crit"] for h in healths),
+        "total_high": sum(h["open_high"] for h in healths),
+    }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -171,6 +297,8 @@ def init_state():
         "dark_mode": False, "cloudwatch_connected": False,
         "slack_webhook": "", "teams_webhook": "",
         "last_ingestion": None,
+        "selected_app": None,          # None = master dashboard; string = app drill-down
+        "app_health_cache": {},        # cache generated metrics per app
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -638,6 +766,161 @@ def auto_process_issues():
         st.session_state.auto_processed_ids.add(issue["id"])
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MASTER DASHBOARD — Fleet-wide application health overview
+# ══════════════════════════════════════════════════════════════════════════════
+
+def render_master_dashboard():
+    dm   = st.session_state.dark_mode
+    card = "#16213e" if dm else "#ffffff"
+    txt  = "#e0e0e0" if dm else "#1e293b"
+
+    STATUS_CFG = {
+        "GREEN": {"color": "#2E7D32", "bg": "#E8F5E9", "icon": "🟢", "label": "Healthy"},
+        "AMBER": {"color": "#E65100", "bg": "#FFF3E0", "icon": "🟡", "label": "Degraded"},
+        "RED":   {"color": "#C62828", "bg": "#FFEBEE", "icon": "🔴", "label": "Critical"},
+    }
+
+    summary = fleet_summary()
+
+    # Page header
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,{AC_DARK} 0%,#3D0000 60%,{AC_RED} 100%);
+                border-radius:14px;padding:24px 30px;margin-bottom:24px;color:white;">
+        <div style="display:flex;align-items:center;gap:14px;">
+            <img src="data:image/png;base64,{AC_LOGO_B64}" style="height:40px;border-radius:4px;">
+            <div>
+                <div style="font-size:1.45rem;font-weight:800;">Enterprise Application Health Dashboard</div>
+                <div style="font-size:0.82rem;opacity:0.8;margin-top:2px;">
+                    Real-time fleet status across all Air Canada applications · Click any application to drill in
+                </div>
+            </div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # Fleet KPI strip
+    k1,k2,k3,k4,k5,k6 = st.columns(6)
+    for col, label, value, color in [
+        (k1, "Total Apps",           str(summary["total"]),         "#1565C0"),
+        (k2, "🟢 Healthy",           str(summary["green"]),          "#2E7D32"),
+        (k3, "🟡 Degraded",          str(summary["amber"]),          "#E65100"),
+        (k4, "🔴 Critical",           str(summary["red"]),           "#C62828"),
+        (k5, "Fleet Health Index",   f"{summary['avg_index']}/100",  "#007CC3"),
+        (k6, "Open Critical Issues", str(summary["total_crit"]),    "#C62828"),
+    ]:
+        with col:
+            st.markdown(f"""
+            <div style="background:{card};border-radius:10px;padding:14px 16px;
+                        border-top:4px solid {color};text-align:center;
+                        box-shadow:0 2px 8px rgba(0,0,0,{'0.3' if dm else '0.06'});">
+                <div style="font-size:1.8rem;font-weight:800;color:{color};">{value}</div>
+                <div style="font-size:0.68rem;color:#94A3B8;text-transform:uppercase;
+                            letter-spacing:0.8px;margin-top:2px;">{label}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Refresh row
+    rc1, rc2 = st.columns([5,1])
+    with rc1:
+        st.markdown(f"<span style='font-size:0.75rem;color:#94A3B8;'>Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</span>", unsafe_allow_html=True)
+    with rc2:
+        if st.button("🔄 Refresh", key="master_refresh"):
+            st.session_state.app_health_cache = {}
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("<div style='font-size:0.72rem;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;'>All Applications — Click to open detailed dashboard</div>", unsafe_allow_html=True)
+
+    T = HEALTH_THRESHOLDS
+
+    def metric_badge(val, warn, crit, unit="", prefix=""):
+        if val >= crit:   clr, bg = "#C62828", "#FFEBEE"
+        elif val >= warn: clr, bg = "#E65100", "#FFF3E0"
+        else:             clr, bg = "#2E7D32", "#E8F5E9"
+        return f'<span style="background:{bg};color:{clr};padding:1px 7px;border-radius:8px;font-size:0.68rem;font-weight:700;">{prefix}{val}{unit}</span>'
+
+    # 3-column grid of app cards
+    for row_start in range(0, len(APPLICATIONS), 3):
+        row_apps = APPLICATIONS[row_start:row_start+3]
+        cols = st.columns(3)
+        for col, app in zip(cols, row_apps):
+            h    = generate_app_health(app["id"])
+            scfg = STATUS_CFG[h["status"]]
+            idx  = h["health_index"]
+            bar_color = "#2E7D32" if idx >= 80 else "#E65100" if idx >= 50 else "#C62828"
+            with col:
+                st.markdown(f"""
+                <div style="background:{card};border-radius:12px;padding:18px 20px;
+                            border:1px solid {'#333' if dm else '#E8EEF4'};
+                            border-left:5px solid {scfg['color']};
+                            box-shadow:0 2px 12px rgba(0,0,0,{'0.3' if dm else '0.06'});
+                            margin-bottom:4px;">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+                        <div>
+                            <span style="font-size:1.3rem;">{app['icon']}</span>
+                            <span style="font-size:1rem;font-weight:700;color:{txt};margin-left:6px;">{app['name']}</span>
+                        </div>
+                        <span style="background:{scfg['bg']};color:{scfg['color']};padding:3px 10px;
+                                     border-radius:10px;font-size:0.7rem;font-weight:700;">
+                            {scfg['icon']} {scfg['label']}
+                        </span>
+                    </div>
+                    <div style="font-size:0.72rem;color:#94A3B8;margin-bottom:12px;line-height:1.4;">{app['description']}</div>
+                    <div style="margin-bottom:10px;">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+                            <span style="font-size:0.65rem;color:#94A3B8;text-transform:uppercase;letter-spacing:0.6px;">Health Index</span>
+                            <span style="font-size:0.72rem;font-weight:700;color:{bar_color};">{idx}/100</span>
+                        </div>
+                        <div style="background:{'#2a2a3e' if dm else '#E2E8F0'};border-radius:4px;height:6px;">
+                            <div style="background:{bar_color};width:{idx}%;height:6px;border-radius:4px;"></div>
+                        </div>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">
+                        {metric_badge(h['cpu'],        T['cpu_warn'],        T['cpu_crit'],        '%',  'CPU ')}
+                        {metric_badge(h['mem'],        T['mem_warn'],        T['mem_crit'],        '%',  'MEM ')}
+                        {metric_badge(h['disk'],       T['disk_warn'],       T['disk_crit'],       '%',  'DSK ')}
+                        {metric_badge(h['error_rate'], T['error_rate_warn'], T['error_rate_crit'], '%',  'ERR ')}
+                        {metric_badge(h['resp_time'],  T['resp_time_warn'],  T['resp_time_crit'],  'ms', 'RT ')}
+                    </div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.68rem;color:#94A3B8;
+                                border-top:1px solid {'#333' if dm else '#F1F5F9'};padding-top:8px;">
+                        <span>🔴 {h['open_crit']} critical &nbsp; 🟠 {h['open_high']} high</span>
+                        <span>⬆️ {h['uptime']}% uptime</span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+                if st.button(f"Open {app['name']} →", key=f"open_{app['id']}", use_container_width=True):
+                    st.session_state.selected_app = app["id"]
+                    audit(f"APP_DRILLDOWN", f"Opened {app['name']} dashboard", "NAVIGATION")
+                    st.rerun()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # Fleet summary table
+    st.markdown("---")
+    st.markdown("#### 📋 Fleet Health Summary Table")
+    rows = []
+    for app in APPLICATIONS:
+        h = generate_app_health(app["id"])
+        s = STATUS_CFG[h["status"]]
+        rows.append({
+            "Application":   f"{app['icon']} {app['name']}",
+            "Status":        f"{s['icon']} {s['label']}",
+            "Health Index":  f"{h['health_index']}/100",
+            "CPU %":         h["cpu"],
+            "Memory %":      h["mem"],
+            "Disk %":        h["disk"],
+            "Error Rate %":  h["error_rate"],
+            "Response (ms)": h["resp_time"],
+            "Uptime %":      h["uptime"],
+            "🔴 Critical":   h["open_crit"],
+            "🟠 High":       h["open_high"],
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGIN + SIDEBAR
 # ══════════════════════════════════════════════════════════════════════════════
@@ -709,6 +992,20 @@ def render_sidebar():
 
         st.markdown(f"**👤 {st.session_state.user}**")
         st.markdown(f"<span style='font-size:0.72rem;color:#FFAAAA;'>Role: {st.session_state.role}</span>", unsafe_allow_html=True)
+
+        # Back to fleet button when inside an app
+        if st.session_state.selected_app:
+            app_info = next((a for a in APPLICATIONS if a["id"] == st.session_state.selected_app), None)
+            if app_info:
+                st.markdown(f"""
+                <div style="background:rgba(204,0,0,0.15);border-radius:8px;padding:8px 12px;margin:8px 0;
+                            border-left:3px solid {AC_RED};">
+                    <div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.8px;color:#FFAAAA;margin-bottom:2px;">Viewing</div>
+                    <div style="font-size:0.82rem;font-weight:700;color:#FF8A80;">{app_info['icon']} {app_info['name']}</div>
+                </div>""", unsafe_allow_html=True)
+            if st.button("← Fleet Dashboard", use_container_width=True, key="back_to_fleet"):
+                st.session_state.selected_app = None
+                st.rerun()
         st.markdown("---")
         st.markdown("<div style='font-size:0.6rem;text-transform:uppercase;letter-spacing:1px;color:#FFAAAA;margin-bottom:6px;'>Auto Actions</div>", unsafe_allow_html=True)
         st.session_state.auto_jira  = st.toggle("🎫 Auto Jira",  value=st.session_state.auto_jira)
@@ -1693,15 +1990,52 @@ def main():
         return
 
     render_sidebar()
+
+    # ── MASTER DASHBOARD — no app selected ───────────────────────────────────
+    if st.session_state.selected_app is None:
+        render_master_dashboard()
+        return
+
+    # ── APP DETAIL VIEW — specific app selected ───────────────────────────────
+    app_info = next((a for a in APPLICATIONS if a["id"] == st.session_state.selected_app), None)
+    if not app_info:
+        st.session_state.selected_app = None
+        st.rerun()
+        return
+
     auto_process_issues()
 
-    # Header
+    # App detail header — shows health snapshot + back breadcrumb
+    h    = generate_app_health(app_info["id"])
+    STATUS_CFG = {
+        "GREEN": {"color":"#2E7D32","bg":"#E8F5E9","icon":"🟢","label":"Healthy"},
+        "AMBER": {"color":"#E65100","bg":"#FFF3E0","icon":"🟡","label":"Degraded"},
+        "RED":   {"color":"#C62828","bg":"#FFEBEE","icon":"🔴","label":"Critical"},
+    }
+    scfg = STATUS_CFG[h["status"]]
+    bar_color = "#2E7D32" if h["health_index"] >= 80 else "#E65100" if h["health_index"] >= 50 else "#C62828"
+
     st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;">
-        <img src="data:image/png;base64,{AC_LOGO_B64}" style="height:44px;border-radius:4px;">
-        <div>
-            <div style="font-size:1.35rem;font-weight:800;color:{AC_DARK if not st.session_state.dark_mode else '#e0e0e0'};">Air Canada Support System <span style="font-size:0.7rem;font-weight:400;color:#94A3B8;">v2.0</span></div>
-            <div style="font-size:0.75rem;color:#64748B;">Enterprise Monitoring & Automated Incident Management · Powered by Infosys</div>
+    <div style="background:linear-gradient(135deg,{AC_DARK} 0%,#3D0000 60%,{AC_RED} 100%);
+                border-radius:14px;padding:18px 28px;margin-bottom:20px;color:white;">
+        <div style="font-size:0.72rem;opacity:0.6;margin-bottom:6px;">
+            ← Fleet Dashboard &nbsp;/&nbsp; {app_info['icon']} {app_info['name']}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+                <div style="font-size:1.35rem;font-weight:800;">{app_info['icon']} {app_info['name']} — Detailed Dashboard</div>
+                <div style="font-size:0.78rem;opacity:0.8;margin-top:2px;">{app_info['description']}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                <span style="background:{scfg['bg']};color:{scfg['color']};padding:4px 14px;
+                             border-radius:12px;font-size:0.78rem;font-weight:700;">
+                    {scfg['icon']} {scfg['label']} — Health {h['health_index']}/100
+                </span>
+                <span style="font-size:0.75rem;opacity:0.75;">
+                    CPU {h['cpu']}% &nbsp;|&nbsp; MEM {h['mem']}% &nbsp;|&nbsp;
+                    ERR {h['error_rate']}% &nbsp;|&nbsp; RT {h['resp_time']}ms
+                </span>
+            </div>
         </div>
     </div>""", unsafe_allow_html=True)
 
